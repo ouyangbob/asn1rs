@@ -89,7 +89,31 @@ impl TagResolver<'_> {
                 }
                 tags.into_iter().next()
             }
+            Type::OpenType(open_type) => {
+                let mut tags = open_type
+                    .variants()
+                    .take(
+                        open_type
+                            .extension_after_index()
+                            .map(|extension_after| extension_after + 1)
+                            .unwrap_or_else(|| open_type.len()),
+                    )
+                    .map(|v| v.tag().or_else(|| self.resolve_type_tag(v.r#type())))
+                    .collect::<Option<Vec<Tag>>>()?;
+                tags.sort();
+                if cfg!(feature = "debug-proc-macro") {
+                    println!("resolved::::{:?}", tags);
+                }
+                tags.into_iter().next()
+            }
             Type::TypeReference(inner, tag) => {
+                let tag = (*tag).or_else(|| self.resolve_tag(inner.as_str()));
+                if cfg!(feature = "debug-proc-macro") {
+                    println!("resolved :: {}::Tag = {:?}", inner, tag);
+                }
+                tag
+            }
+            Type::TypeReferenceId(inner, tag,_id,_key) => {
                 let tag = (*tag).or_else(|| self.resolve_tag(inner.as_str()));
                 if cfg!(feature = "debug-proc-macro") {
                     println!("resolved :: {}::Tag = {:?}", inner, tag);

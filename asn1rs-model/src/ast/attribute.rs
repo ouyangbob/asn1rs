@@ -4,7 +4,7 @@ use super::tag::AttrTag;
 use crate::ast::constants::ConstLit;
 use crate::model::LiteralValue;
 use crate::model::{
-    Charset, Choice, ChoiceVariant, Enumerated, EnumeratedVariant, Range, Size, Tag, Type,
+    Charset, Choice, ChoiceVariant, OpenType,OpenTypeVariant,Enumerated, EnumeratedVariant, Range, Size, Tag, Type,
 };
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -15,6 +15,7 @@ use syn::parenthesized;
 use syn::parse::{Parse, ParseBuffer, ParseStream};
 use syn::token;
 use syn::Token;
+use proc_macro2::Delimiter;
 
 #[derive(Debug)]
 pub(crate) struct AsnAttribute<C: Context> {
@@ -43,7 +44,6 @@ impl<C: Context> Parse for AsnAttribute<C> {
     fn parse<'a>(input: &'a ParseBuffer<'a>) -> syn::Result<Self> {
         let mut asn = Self::new(C::Primary::parse(input)?);
         eof_or_comma(input, "Primary attribute must be separated by comma")?;
-
         while !input.cursor().eof() {
             let lowercase_ident = input
                 .step(|c| {
@@ -150,7 +150,54 @@ fn parse_type_pre_stepped<'a>(
                 return Err(input.error("Expected identifier 'tag'"));
             }
             let tag = AttrTag::parse(&content)?;
-            Ok(Type::TypeReference(ident.to_string(), Some(tag.0)))
+            let mut key_val=None;
+            if !content.is_empty(){
+                let _ = content.parse::<Token![,]>()?;
+                let key_or_tag_ident: syn::Ident = content.parse()?;
+                if "key".eq_ignore_ascii_case(&key_or_tag_ident.to_string()) {
+                    key_val=content.step(|s|{
+                        let (group, _, outer) = s
+                            .group(Delimiter::Parenthesis)
+                            .ok_or_else(|| input.error("Expected parenthesis"))?;
+                        if let Some((literal, _)) = group.literal() {
+                            let number = literal.to_string().parse::<usize>().map_err(|_| {
+                                syn::Error::new(literal.span(), "Literal is not a number")
+                            })?;
+                            Ok((Some(number),outer))
+                        }else {
+                            Err(syn::Error::new(group.span(), "Expected ref_id variant"))
+                        }
+                    })?;
+                }
+            }
+            Ok(Type::TypeReferenceId(ident.to_string(), Some(tag.0),None,key_val))
+        }
+        "open_type" => {
+            let content;
+            parenthesized!(content in input);
+            let ident: syn::Ident = content.parse()?;
+            let _ = content.parse::<Token![,]>()?;
+            let ref_id_ident: syn::Ident = content.parse()?;
+            if !"ref_id".eq_ignore_ascii_case(&ref_id_ident.to_string()) {
+                return Err(input.error("Expected identifier 'ref_id'"));
+            }
+            let ref_id_val=content.step(|s| {
+                let (group, _, outer) = s
+                    .group(Delimiter::Parenthesis)
+                    .ok_or_else(|| input.error("Expected parenthesis"))?;
+                if let Some((variant, _)) = group.ident() {
+                    Ok((variant.to_string(),outer))
+                }else {
+                    Err(syn::Error::new(group.span(), "Expected ref_id variant"))
+                }
+            })?;
+            let _ = content.parse::<Token![,]>()?;
+            let tag_ident: syn::Ident = content.parse()?;
+            if !"tag".eq_ignore_ascii_case(&tag_ident.to_string()) {
+                return Err(input.error("Expected identifier 'tag'"));
+            }
+            let tag = AttrTag::parse(&content)?;
+            Ok(Type::TypeReferenceId(ident.to_string(), Some(tag.0),Some(ref_id_val),None))
         }
         "option" | "optional" => {
             let content;
@@ -292,7 +339,6 @@ impl PrimaryContext for Type {
                     .ok_or_else(|| c.error("Expected type, number or extension marker"))
             })?
             .to_lowercase();
-
         parse_type_pre_stepped(&lowercase_ident, input)
     }
 }
@@ -333,6 +379,20 @@ impl Context for Choice {
 }
 
 impl Context for ChoiceVariant {
+    type Primary = Type;
+    const EXTENSIBLE_AFTER: bool = false;
+    const TAGGABLE: bool = true;
+    const CONSTS: bool = false;
+}
+
+impl Context for OpenType {
+    type Primary = Type;
+    const EXTENSIBLE_AFTER: bool = false;
+    const TAGGABLE: bool = true;
+    const CONSTS: bool = false;
+}
+
+impl Context for OpenTypeVariant {
     type Primary = Type;
     const EXTENSIBLE_AFTER: bool = false;
     const TAGGABLE: bool = true;

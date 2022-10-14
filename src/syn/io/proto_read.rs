@@ -4,6 +4,7 @@ use crate::syn::*;
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::ops::Range;
+use crate::syn::opentype::Constraint;
 
 #[derive(Debug, Clone)]
 enum State {
@@ -289,7 +290,10 @@ impl<'a> Reader for ProtobufReader<'a> {
             }
         }
     }
-
+    #[inline]
+    fn read_open_type<C: Constraint>(&mut self,_key:usize) -> Result<C, Self::Error> {
+        panic!("not support open type")
+    }
     #[inline]
     fn read_opt<T: ReadableType>(
         &mut self,

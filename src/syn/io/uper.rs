@@ -12,6 +12,7 @@ use std::ops::Range;
 
 pub use crate::io::per::unaligned::buffer::Bits;
 pub use crate::io::per::unaligned::ScopedBitRead;
+use crate::syn::opentype::Constraint;
 
 #[derive(Debug, Clone)]
 pub enum Scope {
@@ -491,6 +492,19 @@ impl Writer for UperWriter {
             } else {
                 choice.write_content(w)
             }
+        })
+    }
+
+    #[inline]
+    fn write_open_type<C: opentype::Constraint>(&mut self, opentype: &C) -> Result<(), Self::Error> {
+        self.write_bit_field_entry(false, true)?;
+        self.with_buffer(|w| {
+            let mut writer = UperWriter::with_capacity(512);
+            opentype.write_content(&mut writer)?;
+            let bytes=writer.byte_content();
+            w.bits.write_length_determinant(None,None,bytes.len() as u64)?;
+            w.bits.write_bits(bytes)
+            // w.bits.write_octetstring(None, None, false, writer.byte_content())
         })
     }
 
@@ -1082,6 +1096,28 @@ impl<B: ScopedBitRead> Reader for UperReader<B> {
 
         #[cfg(feature = "descriptive-deserialize-errors")]
         self.scope_description.push(ScopeDescription::End(C::NAME));
+
+        result
+    }
+
+
+    #[inline]
+    fn read_open_type<C: Constraint>(&mut self,key:usize) -> Result<C, Self::Error> {
+        // #[cfg(feature = "descriptive-deserialize-errors")]
+        // self.scope_description.push(ScopeDescription::choice::<C>());
+
+        let _ = self.read_bit_field_entry(false)?;
+        #[allow(clippy::let_and_return)]
+        let result = self.scope_stashed(|r| {
+            let _length = r.read_length_determinant(None, None)?;
+            let x=C::read_content(key, r);
+            x.and_then(|x|{
+                x.ok_or_else(|| ErrorKind::InvalidChoiceIndex(key as u64, C::VARIANT_COUNT).into())
+            })
+        });
+
+        // #[cfg(feature = "descriptive-deserialize-errors")]
+        // self.scope_description.push(ScopeDescription::End(C::NAME));
 
         result
     }

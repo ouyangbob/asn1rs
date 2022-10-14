@@ -48,9 +48,9 @@ asn1rs-model =  { version = "0.2.2", path = "asn1rs-model", optional = true }
 asn1rs-macros = { version = "0.2.2", path = "asn1rs-macros", optional = true }
 
 [dev-dependencies]
-syn = {version = "1.0.61", features = ["full", "visit"] }
+syn = {version = "1", features = ["default","full", "visit","extra-traits"] }
 quote = "1.0.3"
-proc-macro2 = "1.0.10"
+proc-macro2 = "1"
 
 [features]
 default = ["macros", "model"]

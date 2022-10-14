@@ -19,12 +19,14 @@ pub mod set;
 pub mod setof;
 pub mod utf8string;
 pub mod visiblestring;
+pub mod opentype;
 
 pub use crate::syn::null::Null;
 pub use bitstring::BitString;
 pub use bitstring::BitVec;
 pub use boolean::Boolean;
 pub use choice::Choice;
+pub use opentype::OpenType;
 pub use complex::Complex;
 pub use default::DefaultValue;
 pub use enumerated::Enumerated;
@@ -88,6 +90,7 @@ pub trait Reader {
     fn read_enumerated<C: enumerated::Constraint>(&mut self) -> Result<C, Self::Error>;
 
     fn read_choice<C: choice::Constraint>(&mut self) -> Result<C, Self::Error>;
+    fn read_open_type<C: opentype::Constraint>(&mut self,key:usize) -> Result<C, Self::Error>;
 
     fn read_opt<T: ReadableType>(&mut self) -> Result<Option<T::Type>, Self::Error>;
 
@@ -122,12 +125,19 @@ pub trait Reader {
 
 pub trait Readable: Sized {
     fn read<R: Reader>(reader: &mut R) -> Result<Self, R::Error>;
+
+    fn read_by_key<R: Reader>(_reader: &mut R,_key:usize) -> Result<Self, R::Error>{
+        panic!("not support----Readable&trait&root")
+    }
 }
 
 pub trait ReadableType {
     type Type: Sized;
 
     fn read_value<R: Reader>(reader: &mut R) -> Result<Self::Type, R::Error>;
+    fn read_value_by_key<R: Reader>(_reader: &mut R,_key:usize) -> Result<Self::Type, R::Error>{
+        panic!("not support----ReadableType&trait&root")
+    }
 }
 
 impl<T: Readable> ReadableType for T {
@@ -176,6 +186,7 @@ pub trait Writer {
     ) -> Result<(), Self::Error>;
 
     fn write_choice<C: choice::Constraint>(&mut self, choice: &C) -> Result<(), Self::Error>;
+    fn write_open_type<C: opentype::Constraint>(&mut self, opentype: &C) -> Result<(), Self::Error>;
 
     fn write_opt<T: WritableType>(&mut self, value: Option<&T::Type>) -> Result<(), Self::Error>;
 

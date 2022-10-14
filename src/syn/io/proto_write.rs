@@ -3,6 +3,7 @@ use crate::io::protobuf::{Error, Format};
 use crate::prelude::ProtobufReader;
 use crate::syn::*;
 use std::io::Write;
+use crate::syn::opentype::Constraint;
 
 #[derive(Debug, Default, Copy, Clone)]
 struct State {
@@ -261,6 +262,11 @@ impl Writer for ProtobufWriter<'_> {
 
         self.state.format = Some(Format::LengthDelimited);
         result
+    }
+
+    #[inline]
+    fn write_open_type<C: Constraint>(&mut self, _opentype: &C) -> Result<(), Self::Error> {
+        panic!("not support open type")
     }
 
     #[inline]

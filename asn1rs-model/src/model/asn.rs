@@ -1,9 +1,6 @@
 use crate::model::lor::{Error as ResolveError, TryResolve, Unresolved};
 use crate::model::lor::{ResolveState, Resolved, Resolver};
-use crate::model::{
-    BitString, Charset, Choice, ChoiceVariant, ComponentTypeList, Enumerated, Field, Integer,
-    LitOrRef, LiteralValue, Range, Size, Tag, TagProperty, Target,
-};
+use crate::model::{BitString, Charset, Choice, ChoiceVariant, ComponentTypeList, Enumerated, Field, Integer, LitOrRef, LiteralValue, Range, Size, Tag, TagProperty, Target, OpenType};
 use std::fmt::Debug;
 
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
@@ -146,6 +143,10 @@ pub enum Type<RS: ResolveState = Resolved> {
 
     /// ITU-T X.680 | ISO/IEC 8824-1, 16
     TypeReference(String, Option<Tag>),
+    /// ITU-T X.681
+    TypeReferenceId(String, Option<Tag>,Option<String>,Option<usize>),
+    OpenType(OpenType<RS>),
+
 }
 
 impl Type {
@@ -158,6 +159,22 @@ impl Type {
             fields,
             extension_after: None,
         })
+    }
+
+    pub fn get_ref_id(&self) -> Option<String> {
+        if let Self::TypeReferenceId(_,_,ref_id,_) = self {
+            ref_id.clone()
+        }else{
+            None
+        }
+    }
+
+    pub fn get_key(&self) -> Option<usize> {
+        if let Self::TypeReferenceId(_,_,_,key) = self{
+            key.clone()
+        }else{
+            None
+        }
     }
 }
 
@@ -253,7 +270,9 @@ impl Type<Unresolved> {
             ),
             Type::Enumerated(e) => Type::Enumerated(e.clone()),
             Type::Choice(c) => Type::Choice(c.try_resolve(resolver)?),
+            Type::OpenType(c) => Type::OpenType(c.try_resolve(resolver)?),
             Type::TypeReference(name, tag) => Type::TypeReference(name.clone(), *tag),
+            Type::TypeReferenceId(name, tag,id,key) => Type::TypeReferenceId(name.clone(), *tag,id.clone(),key.clone()),
         })
     }
 }

@@ -1,6 +1,6 @@
 use crate::model::lor::{ResolveState, Resolved};
 use crate::model::rust::Field as RustField;
-use crate::model::{Asn, ChoiceVariant, Integer, LiteralValue, Target};
+use crate::model::{Asn, ChoiceVariant,OpenTypeVariant, Integer, LiteralValue, Target};
 use crate::model::{Charset, Range};
 use crate::model::{ComponentTypeList, ValueReference};
 use crate::model::{Definition, Type};
@@ -435,6 +435,9 @@ pub struct Field {
     pub(crate) name_type: (String, RustType),
     pub(crate) tag: Option<Tag>,
     pub(crate) constants: Vec<(String, String)>,
+    pub(crate) ref_id: Option<String>,
+    pub(crate) key: Option<usize>,
+
 }
 
 impl Field {
@@ -443,6 +446,8 @@ impl Field {
             name_type: (name.to_string(), r#type),
             tag: None,
             constants: Vec::default(),
+            ref_id: None,
+            key:None,
         }
     }
 
@@ -466,6 +471,12 @@ impl Field {
         self.constants = constants;
         self
     }
+
+    pub fn with_ref_id_and_key(mut self, ref_id: Option<String>,key: Option<usize>,) -> Self {
+        self.ref_id = ref_id;
+        self.key=key;
+        self
+    }
 }
 
 impl TagProperty for Field {
@@ -487,6 +498,7 @@ pub struct Enumeration<T> {
     variants: Vec<T>,
     tag: Option<Tag>,
     extended_after_index: Option<usize>,
+    open_type: Option<bool>,
 }
 
 impl<T> From<Vec<T>> for Enumeration<T> {
@@ -495,6 +507,7 @@ impl<T> From<Vec<T>> for Enumeration<T> {
             variants,
             tag: None,
             extended_after_index: None,
+            open_type: None,
         }
     }
 }
@@ -529,6 +542,11 @@ impl<T> Enumeration<T> {
     pub fn is_extensible(&self) -> bool {
         self.extended_after_index.is_some()
     }
+
+    pub fn is_open_type(&self) -> bool {
+        self.open_type.is_some()
+    }
+
 }
 
 impl<T> TagProperty for Enumeration<T> {
@@ -555,6 +573,7 @@ impl PlainEnum {
 pub struct DataVariant {
     name_type: (String, RustType),
     tag: Option<Tag>,
+    key: Option<usize>,
 }
 
 impl DataVariant {
@@ -562,6 +581,7 @@ impl DataVariant {
         Self {
             name_type: (name.to_string(), r#type),
             tag: None,
+            key:None,
         }
     }
 
@@ -571,6 +591,13 @@ impl DataVariant {
 
     pub fn name(&self) -> &str {
         &self.name_type.0
+    }
+
+    pub fn key(&self) -> Option<usize> {
+        self.key
+    }
+    pub fn set_key(&mut self,key: Option<usize>)  {
+        self.key=key
     }
 
     pub fn r#type(&self) -> &RustType {
@@ -658,12 +685,14 @@ impl Model<Rust> {
                 default.clone(),
             ),
             Type::TypeReference(name, tag) => RustType::Complex(name.clone(), *tag),
-            Type::Sequence(_)
+            Type::TypeReferenceId(_,_,_,_)
+            | Type::Sequence(_)
             | Type::SequenceOf(_, _)
             | Type::Set(_)
             | Type::SetOf(_, _)
             | Type::Enumerated(_)
-            | Type::Choice(_) => return None,
+            | Type::Choice(_)
+            | Type::OpenType(_)=> return None,
         })
     }
 
@@ -688,6 +717,13 @@ impl Model<Rust> {
                 ));
             }
             AsnType::TypeReference(_, tag) => {
+                let rust_type = Self::definition_type_to_rust_type(name, asn, *tag, ctxt);
+                ctxt.add_definition(Definition(
+                    name.to_string(),
+                    Rust::tuple_struct_from_type(rust_type).with_tag_opt(*tag),
+                ));
+            }
+            AsnType::TypeReferenceId(_, tag,_id,_key) => {
                 let rust_type = Self::definition_type_to_rust_type(name, asn, *tag, ctxt);
                 ctxt.add_definition(Definition(
                     name.to_string(),
@@ -787,6 +823,7 @@ impl Model<Rust> {
                     variants: Vec::with_capacity(choice.len()),
                     tag,
                     extended_after_index: choice.extension_after_index(),
+                    open_type:None,
                 };
 
                 for ChoiceVariant {
@@ -806,12 +843,35 @@ impl Model<Rust> {
 
                 ctxt.add_definition(Definition(name.into(), Rust::DataEnum(enumeration)));
             }
+            AsnType::OpenType(open_type) => {
+                let mut enumeration = Enumeration {
+                    variants: Vec::with_capacity(open_type.len()),
+                    tag,
+                    extended_after_index: open_type.extension_after_index(),
+                    open_type:Some(true)
+                };
 
+                for OpenTypeVariant {
+                    name: variant_name,
+                    r#type,
+                    tag, ..
+                } in open_type.variants(){
+                    let rust_name = format!("{}{}", name, ctxt.struct_or_enum_name(variant_name));
+                    let rust_role =
+                        Self::definition_type_to_rust_type(&rust_name, r#type, *tag, ctxt);
+                    let rust_field_name = ctxt.variant_name(variant_name);
+                    let mut x=DataVariant::from_name_type(rust_field_name, rust_role).with_tag_opt(*tag);
+                    x.set_key(r#type.get_key());
+                    enumeration.variants.push(x);
+                }
+                ctxt.add_definition(Definition(name.into(), Rust::DataEnum(enumeration)));
+            }
             AsnType::Enumerated(enumerated) => {
                 let mut rust_enum = Enumeration {
                     variants: Vec::with_capacity(enumerated.len()),
                     tag,
                     extended_after_index: enumerated.extension_after_index(),
+                    open_type: None,
                 };
 
                 for variant in enumerated.variants() {
@@ -846,11 +906,12 @@ impl Model<Rust> {
                 rust_role
             };
             let rust_field_name = ctxt.field_name(&field.name);
+            // println!("asn_fields_to_rust_fields,field_name:{:?},source:{:?}",&rust_name,&field);
             let constants = ctxt.to_rust_constants(&field.role.r#type);
             rust_fields.push(
                 RustField::from_name_type(rust_field_name, rust_role)
                     .with_constants(constants)
-                    .with_tag_opt(tag),
+                    .with_tag_opt(tag).with_ref_id_and_key(field.role.r#type.get_ref_id(),field.role.r#type.get_key())
             );
         }
 
@@ -914,12 +975,17 @@ impl Model<Rust> {
             ty @ AsnType::Sequence(_)
             | ty @ AsnType::Set(_)
             | ty @ AsnType::Enumerated(_)
-            | ty @ AsnType::Choice(_) => {
+            | ty @ AsnType::Choice(_)
+            | ty @ AsnType::OpenType(_)=> {
                 let name = ctxt.struct_or_enum_name(name);
                 Self::definition_to_rust(&name, asn, tag, ctxt);
                 RustType::Complex(name, tag.or_else(|| ctxt.resolver().resolve_type_tag(ty)))
             }
             AsnType::TypeReference(name, tag) => RustType::Complex(
+                ctxt.struct_or_enum_name(name),
+                (*tag).or_else(|| ctxt.resolver().resolve_tag(name)),
+            ),
+            AsnType::TypeReferenceId(name, tag,_id,_key) => RustType::Complex(
                 ctxt.struct_or_enum_name(name),
                 (*tag).or_else(|| ctxt.resolver().resolve_tag(name)),
             ),
@@ -1012,7 +1078,9 @@ impl Context<'_> {
             | Type::SetOf(..)
             | Type::Enumerated(_)
             | Type::Choice(_)
-            | Type::TypeReference(_, _) => Vec::default(),
+            | Type::OpenType(_)
+            | Type::TypeReference(_, _)
+            | Type::TypeReferenceId(_, _,_,_) => Vec::default(),
         }
     }
 

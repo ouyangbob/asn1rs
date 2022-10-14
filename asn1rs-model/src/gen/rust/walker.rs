@@ -45,14 +45,30 @@ impl AsnDefWriter {
                 ));
             }
             Rust::DataEnum(enm) => {
-                scope.raw(&format!(
-                    "type AsnDef{} = {}Choice<{}>;",
-                    name, CRATE_SYN_PREFIX, name
-                ));
+                if enm.is_open_type(){
+                    scope.raw(&format!(
+                        "type AsnDef{} = {}OpenType<{}>;",
+                        name, CRATE_SYN_PREFIX, name
+                    ));
+                }else{
+                    scope.raw(&format!(
+                        "type AsnDef{} = {}Choice<{}>;",
+                        name, CRATE_SYN_PREFIX, name
+                    ));
+                }
                 for variant in enm.variants() {
                     self.write_type_declaration(scope, name, variant.name(), variant.r#type());
                 }
             }
+            // Rust::OpenDataEnum(enm) => {
+            //     scope.raw(&format!(
+            //         "type AsnDef{} = {}OpenType<{}>;",
+            //         name, CRATE_SYN_PREFIX, name
+            //     ));
+            //     for variant in enm.variants() {
+            //         self.write_type_declaration(scope, name, variant.name(), variant.r#type());
+            //     }
+            // }
             Rust::TupleStruct {
                 r#type: field,
                 tag: _,
@@ -160,19 +176,43 @@ impl AsnDefWriter {
             Rust::DataEnum(data) => {
                 let fields = data
                     .variants()
-                    .map(|variant| Field {
-                        name_type: (variant.name().to_string(), variant.r#type().clone()),
-                        tag: variant.tag(),
-                        constants: Vec::default(),
+                    .map(|variant| {
+                        Field {
+                            name_type: (variant.name().to_string(), variant.r#type().clone()),
+                            tag: variant.tag(),
+                            constants: Vec::default(),
+                            ref_id: None,
+                            key: variant.key(),
+                        }
                     })
                     .collect::<Vec<_>>();
 
                 // ITU-T X.680 | ISO/IEC 8824-1, G.2.12.3 (CHOICE)
                 let fields = Self::assign_implicit_tags(&fields);
-
                 self.write_field_constraints(scope, name, &fields);
-                self.write_choice_constraint(scope, name, data)
+                if data.is_open_type(){
+                    self.write_open_type_constraint(scope, name, data)
+                }else{
+                    self.write_choice_constraint(scope, name, data)
+                }
             }
+            //TODO opendata enum
+            // Rust::OpenDataEnum(data) => {
+            //     let fields = data
+            //         .variants()
+            //         .map(|variant| Field {
+            //             name_type: (variant.name().to_string(), variant.r#type().clone()),
+            //             tag: variant.tag(),
+            //             constants: Vec::default(),
+            //         })
+            //         .collect::<Vec<_>>();
+            //
+            //     // ITU-T X.680 | ISO/IEC 8824-1, G.2.12.3 (CHOICE)
+            //     let fields = Self::assign_implicit_tags(&fields);
+            //
+            //     self.write_field_constraints(scope, name, &fields);
+            //     self.write_choice_constraint(scope, name, data)
+            // }
             Rust::TupleStruct {
                 r#type,
                 tag,
@@ -182,6 +222,8 @@ impl AsnDefWriter {
                     name_type: ("0".to_string(), r#type.clone()),
                     tag: *tag,
                     constants: constants.to_vec(),
+                    ref_id:None,
+                    key:None,
                 }];
                 self.write_field_constraints(scope, name, &fields[..]);
                 self.write_sequence_or_set_constraint(
@@ -384,6 +426,8 @@ impl AsnDefWriter {
                         name_type: (virtual_field_name, *inner.clone()),
                         tag: None,
                         constants: field.constants().to_vec(),
+                        ref_id: None,
+                        key:None,
                     },
                     &constraint_type_name,
                 )
@@ -402,6 +446,8 @@ impl AsnDefWriter {
                     name_type: (field.name().to_string(), *inner.clone()),
                     tag: field.tag(),
                     constants: field.constants().to_vec(),
+                    ref_id: None,
+                    key:None,
                 },
                 constraint_type_name,
             ),
@@ -424,6 +470,8 @@ impl AsnDefWriter {
                         name_type: (virtual_field_name, *inner.clone()),
                         tag: field.tag,
                         constants: field.constants().to_vec(),
+                        ref_id: None,
+                        key:None,
                     },
                     &constraint_type_name,
                 )
@@ -495,7 +543,7 @@ impl AsnDefWriter {
         );
     }
 
-    fn impl_readable(&self, scope: &mut Scope, name: &str) {
+    fn impl_readable(&self, scope: &mut Scope, Definition(name, r#type): &Definition<Rust>) {
         let imp = scope
             .new_impl(name)
             .impl_trait(format!("{}Readable", CRATE_SYN_PREFIX));
@@ -506,9 +554,22 @@ impl AsnDefWriter {
             .arg("reader", "&mut R")
             .ret("Result<Self, R::Error>")
             .line(format!("AsnDef{}::read_value(reader)", name));
+
+        if let Rust::DataEnum(data)=r#type {
+            if data.is_open_type(){
+                imp.new_fn("read_by_key")
+                    .attr("inline")
+                    .generic(&format!("R: {}Reader", CRATE_SYN_PREFIX))
+                    .arg("reader", "&mut R")
+                    .arg("key", "usize")
+                    .ret("Result<Self, R::Error>")
+                    .line(format!("AsnDef{}::read_value_by_key(reader,key)", name));
+            }
+        }
+
     }
 
-    fn impl_writable(&self, scope: &mut Scope, name: &str) {
+    fn impl_writable(&self, scope: &mut Scope, Definition(name, _): &Definition<Rust>) {
         let imp = scope
             .new_impl(name)
             .impl_trait(format!("{}Writable", CRATE_SYN_PREFIX));
@@ -583,7 +644,11 @@ impl AsnDefWriter {
             }),
         );
         let mut imp = Impl::new(name);
-        imp.impl_trait(format!("{}choice::Constraint", CRATE_SYN_PREFIX));
+        if choice.is_open_type(){
+            imp.impl_trait(format!("{}opentype::Constraint", CRATE_SYN_PREFIX));
+        }else{
+            imp.impl_trait(format!("{}choice::Constraint", CRATE_SYN_PREFIX));
+        }
 
         imp.new_fn("to_choice_index")
             .attr("inline")
@@ -629,6 +694,90 @@ impl AsnDefWriter {
                     match_block.line(format!(
                         "{} => Ok(Some(Self::{}(AsnDef{}::read_value(reader)?))),",
                         index,
+                        variant.name(),
+                        combined
+                    ));
+                }
+                match_block.line("_ => Ok(None),");
+                match_block
+            });
+
+        Self::insert_consts(
+            scope,
+            imp,
+            &[
+                format!("const NAME: &'static str = \"{}\";", name),
+                format!("const VARIANT_COUNT: u64 = {};", choice.len()),
+                format!(
+                    "const STD_VARIANT_COUNT: u64 = {};",
+                    choice
+                        .extension_after_index()
+                        .map(|v| v + 1)
+                        .unwrap_or_else(|| choice.len())
+                ),
+                format!("const EXTENSIBLE: bool = {};", choice.is_extensible()),
+            ],
+        );
+    }
+    fn write_open_type_constraint(&self, scope: &mut Scope, name: &str, choice: &DataEnum) {
+        Self::write_common_constraint_type(
+            scope,
+            name,
+            choice.tag().unwrap_or_else(|| {
+                panic!("For at least one entry in {} the Tag is not assigned", name)
+            }),
+        );
+        let mut imp = Impl::new(name);
+        if choice.is_open_type(){
+            imp.impl_trait(format!("{}opentype::Constraint", CRATE_SYN_PREFIX));
+        }else{
+            imp.impl_trait(format!("{}choice::Constraint", CRATE_SYN_PREFIX));
+        }
+
+        imp.new_fn("to_choice_index")
+            .attr("inline")
+            .arg_ref_self()
+            .ret("usize")
+            .push_block({
+                let mut match_block = Block::new("match self");
+                for (_, variant) in choice.variants().enumerate() {
+                    match_block.line(format!("Self::{}(_) => {},", variant.name(), variant.key().unwrap()));
+                }
+                match_block
+            });
+
+        imp.new_fn("write_content")
+            .attr("inline")
+            .generic(&format!("W: {}Writer", CRATE_SYN_PREFIX))
+            .arg_ref_self()
+            .arg("writer", "&mut W")
+            .ret("Result<(), W::Error>")
+            .push_block({
+                let mut match_block = Block::new("match self");
+                for variant in choice.variants() {
+                    let combined = Self::combined_field_type_name(name, variant.name());
+                    match_block.line(format!(
+                        "Self::{}(c) => AsnDef{}::write_value(writer, c),",
+                        variant.name(),
+                        combined
+                    ));
+                }
+                match_block
+            });
+
+        imp.new_fn("read_content")
+            .attr("inline")
+            .generic(&format!("R: {}Reader", CRATE_SYN_PREFIX))
+            .arg("index", "usize")
+            .arg("reader", "&mut R")
+            .ret("Result<Option<Self>, R::Error>")
+            .push_block({
+                let mut match_block = Block::new("match index");
+                for (_, variant) in choice.variants().enumerate() {
+                    let combined = Self::combined_field_type_name(name, variant.name());
+                    match_block.line(format!(
+                        "{} => Ok(Some(Self::{}(AsnDef{}::read_value(reader)?))),",
+                        variant.key().unwrap(),
                         variant.name(),
                         combined
                     ));
@@ -841,15 +990,48 @@ impl AsnDefWriter {
         name: &str,
         fields: &[Field],
     ) {
-        imp.new_fn("read_seq")
+        let mut open_key=false;
+        fields.iter().for_each(|field|{
+            if let Some(_)=&field.ref_id{
+                open_key=true;
+            }
+        });
+        let block=imp.new_fn("read_seq")
             .attr("inline")
             .generic(&format!("R: {}Reader", CRATE_SYN_PREFIX))
             .arg("reader", "&mut R")
             .ret("Result<Self, R::Error>")
-            .bound("Self", "Sized")
-            .push_block({
+            .bound("Self", "Sized");
+        if open_key{
+            for field in fields {
+                if let Some(key)=&field.ref_id{
+                    block.line(format!(
+                        "let {} = AsnDef{}::read_value_by_key(reader,*(&{}.0) as usize)?;",
+                        field.name(),
+                        Self::combined_field_type_name(name, field.name()),
+                        key
+                    ));
+                }else{
+                    block.line(format!(
+                        "let {}:{}= AsnDef{}::read_value(reader)?;",
+                        field.name(),
+                        field.r#type().to_string(),
+                        Self::combined_field_type_name(name, field.name())
+                    ));
+                }
+            }
+            let mut rtn_block = Block::new("Ok(Self");
+            for field in fields {
+                rtn_block.line(format!(
+                    "{},",
+                    field.name(),
+                ));
+            }
+            rtn_block.after(")");
+            block.push_block(rtn_block);
+        }else{
+            block.push_block({
                 let mut block = Block::new("Ok(Self");
-
                 for field in fields {
                     block.line(format!(
                         "{}: AsnDef{}::read_value(reader)?,",
@@ -857,10 +1039,10 @@ impl AsnDefWriter {
                         Self::combined_field_type_name(name, field.name())
                     ));
                 }
-
                 block.after(")");
                 block
             });
+        }
     }
 
     fn write_sequence_or_set_constraint_write_fn(
@@ -894,8 +1076,8 @@ impl AsnDefWriter {
         for definition in &model.definitions {
             Self.write_type_definitions(&mut scope, definition);
             Self.write_constraints(&mut scope, definition);
-            Self.impl_readable(&mut scope, &definition.0);
-            Self.impl_writable(&mut scope, &definition.0);
+            Self.impl_readable(&mut scope, &definition);
+            Self.impl_writable(&mut scope, &definition);
         }
 
         scope.to_string()

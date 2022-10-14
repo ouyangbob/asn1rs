@@ -42,6 +42,7 @@ mod rs;
 mod size;
 mod tag;
 mod tag_resolver;
+mod opentype;
 
 use crate::model::itc::InnerTypeConstraints;
 use crate::model::lor::{ResolveState, Resolved, Resolver, Unresolved};
@@ -51,6 +52,8 @@ pub use bit_string::BitString;
 pub use charset::Charset;
 pub use choice::Choice;
 pub use choice::ChoiceVariant;
+pub use opentype::OpenType;
+pub use opentype::OpenTypeVariant;
 pub use components::ComponentTypeList;
 pub use definition::Definition;
 pub use enumerated::Enumerated;

@@ -1,4 +1,5 @@
 use crate::syn::*;
+use crate::syn::opentype::Constraint;
 
 #[derive(Default)]
 pub struct PrintlnWriter(usize);
@@ -101,6 +102,7 @@ impl Writer for PrintlnWriter {
         })
     }
 
+
     fn write_choice<C: choice::Constraint>(&mut self, choice: &C) -> Result<(), Self::Error> {
         self.indented_println(&format!("Write choice {}, tag={:?}", C::NAME, C::TAG));
         self.with_increased_indentation(|w| {
@@ -117,6 +119,26 @@ impl Writer for PrintlnWriter {
                     C::VARIANT_COUNT
                 ));
                 choice.write_content(w)
+            })
+        })
+    }
+
+    fn write_open_type<C: Constraint>(&mut self, opentype: &C) -> Result<(), Self::Error> {
+        self.indented_println(&format!("Write opentype {}, tag={:?}", C::NAME, C::TAG));
+        self.with_increased_indentation(|w| {
+            if C::EXTENSIBLE {
+                w.indented_println("extensible");
+            } else {
+                w.indented_println("normal");
+            }
+            w.with_increased_indentation(|w| {
+                w.indented_println(&format!(
+                    "opentype_index {}/{}/{}",
+                    opentype.to_choice_index(),
+                    C::STD_VARIANT_COUNT,
+                    C::VARIANT_COUNT
+                ));
+                opentype.write_content(w)
             })
         })
     }

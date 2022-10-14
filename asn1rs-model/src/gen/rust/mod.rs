@@ -440,7 +440,15 @@ impl RustCodeGenerator {
             Type::Set(_) => (Cow::Borrowed("set"), Vec::default()),
             Type::Enumerated(_) => (Cow::Borrowed("enumerated"), Vec::default()),
             Type::Choice(_) => (Cow::Borrowed("choice"), Vec::default()),
+            Type::OpenType(_) => (Cow::Borrowed("open_type"), Vec::default()),
             Type::TypeReference(inner, tag) => (
+                Cow::Borrowed("complex"),
+                vec![Some(inner.clone()), (*tag).map(Self::asn_attribute_tag)]
+                    .into_iter()
+                    .flatten()
+                    .collect(),
+            ),
+            Type::TypeReferenceId(inner, tag,_id,_key) => (
                 Cow::Borrowed("complex"),
                 vec![Some(inner.clone()), (*tag).map(Self::asn_attribute_tag)]
                     .into_iter()

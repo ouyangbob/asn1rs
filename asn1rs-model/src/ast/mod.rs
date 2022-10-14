@@ -8,7 +8,7 @@ mod tag;
 use crate::ast::attribute::{Context, DefinitionHeader, Transparent};
 use crate::ast::constants::ConstLit;
 use crate::model::lor::Resolved;
-use crate::model::{Choice, ChoiceVariant, Definition, Enumerated, Field, Model, Type};
+use crate::model::{Choice, ChoiceVariant,OpenType,OpenTypeVariant, Definition, Enumerated, Field, Model, Type};
 use crate::model::{ComponentTypeList, EnumeratedVariant, TagProperty, TagResolver};
 use attribute::AsnAttribute;
 use proc_macro2::TokenStream;
@@ -37,7 +37,6 @@ pub fn parse(attr: TokenStream, item: TokenStream) -> TokenStream {
             return e;
         }
     };
-
     if cfg!(feature = "debug-proc-macro") {
         println!("---------- parsed definition begin ----------");
         println!("{:#?}", definition);
@@ -76,7 +75,6 @@ pub fn expand(definition: Option<Definition<AsnModelType>>) -> Vec<TokenStream> 
     if let Some(definition) = definition {
         model.definitions.push(definition);
         use crate::gen::rust::walker::AsnDefWriter;
-
         if cfg!(feature = "debug-proc-macro") {
             println!("---------- parsed definition to rust begin ----------");
             println!("{:?}", model.to_rust_keep_names());
@@ -102,7 +100,6 @@ pub fn parse_asn_definition(
         println!("ATTRIBUTE: {}", attr);
         println!("ITEM:      {}", item);
     }
-
     let item = syn::parse2::<Item>(item)
         .map_err(|e| compile_error_ts(item_span, format!("Invalid Item: {}", e)))?;
     let asn = syn::parse2::<AsnAttribute<DefinitionHeader>>(attr.clone()).map_err(|e| {
@@ -111,10 +108,9 @@ pub fn parse_asn_definition(
             format!("Invalid ASN attribute ('{}'): {}", attr, e),
         )
     })?;
-
     if cfg!(feature = "debug-proc-macro") {
         println!("{:?}", asn);
-        println!("Matching item {:?}", item);
+        // println!("Matching item {:?}", item);
     }
 
     match item {
@@ -132,6 +128,9 @@ pub fn parse_asn_definition(
         }
         Item::Enum(enm) if asn.primary.eq_ignore_ascii_case("choice") => {
             parse_choice(enm, &asn, attr_span)
+        }
+        Item::Enum(enm) if asn.primary.eq_ignore_ascii_case("open_type") => {
+            parse_open_type(enm, &asn, attr_span)
         }
         item => Ok((None, item)),
     }
@@ -317,6 +316,65 @@ fn parse_choice(
 
     Ok((
         Some(Definition(enm.ident.to_string(), choice.opt_tagged(tag))),
+        Item::Enum(enm),
+    ))
+}
+
+//TODO parse open_type
+fn parse_open_type(
+    mut enm: syn::ItemEnum,
+    asn: &AsnAttribute<DefinitionHeader>,
+    asn_span: proc_macro2::Span,
+) -> Result<(Option<Definition<AsnModelType>>, Item), TokenStream> {
+    enm.variants
+        .iter()
+        .find(|v| v.fields.is_empty())
+        .map(|v| {
+            compile_err_ts(
+                v.span(),
+                "OPEN_TYPE does not allow any variant to not have data attached",
+            )
+        })
+        .transpose()?;
+
+    let variants = enm
+        .variants
+        .iter_mut()
+        .map(|v| {
+            if v.fields.len() != 1 || v.fields.iter().next().unwrap().ident.is_some() {
+                compile_err_ts(
+                    v.span(),
+                    "Variants of OPEN_TYPE have to have exactly one unnamed field",
+                )?;
+            }
+
+            parse_and_remove_first_asn_attribute_type::<OpenTypeVariant>(
+                v.span(),
+                &v.fields.iter().next().unwrap().ty,
+                &mut v.attrs,
+            )
+                .map(|asn| {
+                    // TODO extensible
+                    // TODO tags
+                    OpenTypeVariant {
+                        name: v.ident.to_string(),
+                        tag: asn.tag,
+                        r#type: asn.r#type,
+                        key:None,
+                    }
+                })
+        })
+        .vec_result()?;
+    let extensible_after = find_extensible_index(asn, asn_span, variants.iter().map(|v| v.name()))?;
+
+    let open_type = Type::OpenType(
+        OpenType::from_variants(variants.into_iter()).with_maybe_extension_after(extensible_after),
+    );
+
+    let tag = asn.tag.or_else(|| TagResolver::resolve_default(&open_type));
+
+    Ok((
+        Some(Definition(enm.ident.to_string(), open_type.opt_tagged(tag))),
         Item::Enum(enm),
     ))
 }
